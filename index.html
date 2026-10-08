@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Zalotron — Dev & Multimedia</title>
+<meta name="description" content="Gonzalo Loisotto · Software developer & multimedia designer · Buenos Aires">
+<meta name="theme-color" content="">
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<script src="config.js"></script>
+<script>
+  // color de marca antes del primer pintado: el elegido con el picker, o el de config.js
+  (() => { let c = null; try { c = localStorage.getItem('zltrn-brand'); } catch {} document.documentElement.style.setProperty('--BRAND_COLOR', c || CONFIG.brandColor); })();
+</script>
+</head>
+<body class="loading">
+
+<div class="grain" aria-hidden="true"></div>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="progress" aria-hidden="true"><i></i></div>
+
+<div class="cursor" aria-hidden="true"><div class="c-dot"></div><div class="c-ring"><span></span></div></div>
+
+<!-- LOADER -->
+<div id="loader" aria-hidden="true">
+  <div class="ld-lines"></div>
+  <div class="ld-row">
+    <div class="ld-count">000</div>
+    <div class="mono ld-tag">ZLTRN/OS — boot</div>
+  </div>
+  <div class="ld-bar"><i></i></div>
+</div>
+
+<!-- NAV -->
+<header class="nav">
+  <div class="brand">
+    <a href="#hero" class="logo" data-i18n-cursor="cur.top">ZLTRN<span>.</span></a>
+    <label class="picker mono" data-i18n-cursor="cur.color"><input type="color" id="brand-picker" aria-label="Brand color"><span id="brand-hex"></span></label>
+    <button class="picker-reset mono" id="brand-reset" data-i18n-cursor="cur.reset" data-i18n-label="aria.reset" aria-label="Restaurar color" hidden>↺</button>
+    <div class="lang mono">
+      <button type="button" class="lang-btn" aria-haspopup="menu" aria-expanded="false" data-i18n-label="aria.lang" aria-label="Idioma" data-i18n-cursor="aria.lang"><span id="lang-cur">ES</span><i>▾</i></button>
+      <ul class="lang-menu" role="menu" hidden></ul>
+    </div>
+  </div>
+  <nav>
+    <ul class="mono">
+      <li><a href="#perfil"><span class="n">01</span> <span data-i18n="nav.profile">Perfil</span></a></li>
+      <li><a href="#stack"><span class="n">02</span> <span data-i18n="nav.stack">Stack</span></a></li>
+      <li><a href="#trayectoria"><span class="n">03</span> <span data-i18n="nav.exp">Trayectoria</span></a></li>
+      <li><a href="#proyectos"><span class="n">04</span> <span data-i18n="nav.projects">Proyectos</span></a></li>
+      <li><a href="#contacto"><span class="n">05</span> <span data-i18n="nav.contact">Contacto</span></a></li>
+    </ul>
+  </nav>
+  <div class="mono nav-clock"><span class="dot"></span> BA <span id="clock">--:--:--</span></div>
+</header>
+
+<aside class="side-index mono" aria-hidden="true">
+  <a href="#hero" data-sec="hero">00</a>
+  <a href="#perfil" data-sec="perfil">01</a>
+  <a href="#stack" data-sec="stack">02</a>
+  <a href="#trayectoria" data-sec="trayectoria">03</a>
+  <a href="#proyectos" data-sec="proyectos">04</a>
+  <a href="#contacto" data-sec="contacto">05</a>
+</aside>
+
+<main>
+
+<!-- HERO -->
+<section id="hero">
+  <canvas id="field"></canvas>
+  <div class="hero-bgword" aria-hidden="true" data-hero-par="0.25">ZALOTRON</div>
+  <div class="hero-top mono">
+    <span>// portfolio_v2026</span>
+    <span id="hero-loc"></span>
+    <span class="status"><i></i> <span data-i18n="hero.status">disponible para proyectos</span></span>
+  </div>
+  <div class="hero-inner">
+    <h1 class="hero-title">
+      <span class="line"><span id="name-1" data-hero-par="0.08">GONZALO</span></span>
+      <span class="line"><span id="name-2" class="outline" data-hero-par="0.16">LOISOTTO</span></span>
+    </h1>
+    <div class="hero-foot">
+      <p class="hero-role mono">&gt; <span id="role"></span><span class="caret">_</span></p>
+      <a href="#perfil" class="scroll-hint mono mag" data-i18n-cursor="cur.down"><span>scroll</span><i></i></a>
+    </div>
+  </div>
+</section>
+
+<!-- PERFIL -->
+<section id="perfil">
+  <div class="s-head rv"><span class="s-num">01</span><h2 class="s-title" data-i18n="nav.profile">Perfil</h2><span class="s-meta mono">whoami</span></div>
+  <p id="statement" class="statement"></p>
+  <div id="stats" class="stats"></div>
+</section>
+
+<!-- STACK -->
+<section id="stack">
+  <div class="s-head rv"><span class="s-num">02</span><h2 class="s-title">Stack</h2><span class="s-meta mono">tools.json</span></div>
+  <div class="marquee" aria-hidden="true">
+    <div class="mq" data-dir="1"><div class="mq-track"></div></div>
+    <div class="mq outline-row" data-dir="-1"><div class="mq-track"></div></div>
+  </div>
+  <div id="stack-grid" class="stack-grid"></div>
+</section>
+
+<!-- TRAYECTORIA -->
+<section id="trayectoria">
+  <div class="s-head rv"><span class="s-num">03</span><h2 class="s-title" data-i18n="nav.exp">Trayectoria</h2><span class="s-meta mono">git log --oneline</span></div>
+  <div class="tl">
+    <div class="tl-line"><i></i></div>
+    <div id="tl-items"></div>
+  </div>
+</section>
+
+<!-- PROYECTOS -->
+<section id="proyectos">
+  <div class="hs-pin">
+    <div class="hs-head">
+      <div class="s-head"><span class="s-num">04</span><h2 class="s-title" data-i18n="nav.projects">Proyectos</h2><span class="s-meta mono">selected_works/</span></div>
+      <div class="hs-counter mono"><span id="hs-cur">01</span> / <span id="hs-tot">00</span></div>
+    </div>
+    <div class="hs-track" id="hs-track"></div>
+    <div class="hs-bar"><i></i></div>
+  </div>
+</section>
+
+<!-- CONTACTO -->
+<section id="contacto">
+  <div class="s-head rv"><span class="s-num">05</span><h2 class="s-title" data-i18n="nav.contact">Contacto</h2><span class="s-meta mono">ping</span></div>
+  <h3 class="big-cta" id="big-cta" aria-label="Hablemos">HABLEMOS</h3>
+  <div class="contact-grid">
+    <div class="contact-left">
+      <button class="email-btn tilt" id="email-btn" data-i18n-cursor="cur.copy">
+        <span class="mono lbl" data-i18n="contact.email">email — click para copiar</span>
+        <span class="addr" id="email-addr"></span>
+      </button>
+      <a class="email-btn wa-btn tilt" id="wa-btn" href="#" target="_blank" rel="noopener" data-i18n-cursor="cur.chat">
+        <span class="mono lbl" data-i18n="contact.wa">whatsapp — escribime directo</span>
+        <span class="addr"><span id="wa-num"></span><svg class="wa-ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 01-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 01-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 012.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0012.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 005.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 00-3.48-8.413Z"/></svg></span>
+      </a>
+      <div class="links mono" id="links"></div>
+    </div>
+    <div class="term rv" id="term">
+      <div class="term-bar mono"><i></i><i></i><i></i><span>zalotron@web: ~</span></div>
+      <div class="term-body" id="term-body"></div>
+      <label class="term-input mono"><span class="pr">❯</span><input id="term-in" autocomplete="off" spellcheck="false" aria-label="terminal" placeholder="escribí help" data-i18n-ph="term.ph"></label>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot mono">
+  <span>© <span id="year"></span> Zalotron</span>
+  <span data-i18n="foot.made">hecho a mano · sin templates</span>
+  <a href="#hero" class="mag" data-i18n-cursor="cur.top" data-i18n="foot.top">↑ volver arriba</a>
+</footer>
+
+<!-- filtro de la onda del click: desplaza el contenido real con el mapa que genera main.js (R = x, G = y, gris = neutro).
+     3 desplazamientos con distinta fuerza, uno por canal → split RGB solo donde hay distorsión -->
+<svg class="fx-defs" aria-hidden="true" width="0" height="0">
+  <filter id="wave" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB" x="0" y="0" width="1" height="1">
+    <feImage id="wave-map" preserveAspectRatio="none" result="map"/>
+    <feFlood flood-color="rgb(128,128,128)" result="neutral"/>
+    <feComposite in="map" in2="neutral" operator="over" result="dmap"/>
+    <feDisplacementMap in="SourceGraphic" in2="dmap" scale="84" xChannelSelector="R" yChannelSelector="G" result="dr"/>
+    <feDisplacementMap in="SourceGraphic" in2="dmap" scale="70" xChannelSelector="R" yChannelSelector="G" result="dg"/>
+    <feDisplacementMap in="SourceGraphic" in2="dmap" scale="56" xChannelSelector="R" yChannelSelector="G" result="db"/>
+    <feColorMatrix in="dr" values="1 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 1 0" result="r"/>
+    <feColorMatrix in="dg" values="0 0 0 0 0  0 1 0 0 0  0 0 0 0 0  0 0 0 1 0" result="g"/>
+    <feColorMatrix in="db" values="0 0 0 0 0  0 0 0 0 0  0 0 1 0 0  0 0 0 1 0" result="b"/>
+    <feComposite in="r" in2="g" operator="arithmetic" k2="1" k3="1" result="rg"/>
+    <feComposite in="rg" in2="b" operator="arithmetic" k2="1" k3="1"/>
+  </filter>
+</svg>
+
+<script src="main.js"></script>
+</body>
+</html>
