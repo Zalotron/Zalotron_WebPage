@@ -247,6 +247,9 @@ let LANG = (() => {
 const tx = v => v && typeof v === 'object' && !Array.isArray(v) ? v[LANG] ?? v.en ?? v.es : v; // { es, en, … } → texto
 const i18n = k => I18N[LANG][k] ?? I18N.en[k] ?? I18N.es[k] ?? k;
 const cvAt = path => tx(path.split('.').reduce((o, k) => o?.[k], { ...CV, exp: EXP, stacks: CONFIG.stacks }));  // 'projects.1.desc' / 'exp.0.info' → texto
+// alto del documento cacheado: leer scrollHeight en cada frame fuerza un layout; se actualiza solo cuando cambia
+const DOC = { h: document.documentElement.scrollHeight };
+new ResizeObserver(() => DOC.h = document.documentElement.scrollHeight).observe(document.body);
 // los colores viven en styles.css (todos derivados de --BRAND_COLOR); acá solo se leen ya resueltos → "r,g,b"
 const rgbOf = (css, el) => {
   let v;
@@ -449,10 +452,11 @@ function boot() {
 function terrain() {
   const c = $('#field'), x = c.getContext('2d');
   const COLS = 84, ROWS = 46, H = 3.2;
+  // colores fijos + opacidad por globalAlpha (armar un rgba() por partícula y por frame es caro)
   let ACC, FG, ACC2, ERR;
-  const colors = () => { ACC = rgbOf('var(--acc)'); FG = rgbOf('var(--fg)'); ACC2 = rgbOf('var(--acc2)'); ERR = rgbOf('var(--err)'); };
+  const colors = () => { [ACC, FG, ACC2, ERR] = ['acc', 'fg', 'acc2', 'err'].map(v => `rgb(${rgbOf(`var(--${v})`)})`); };
   colors(); addEventListener('brand', () => { colors(); if (!run || RM) frame(); });
-  let w, h, dpr, f, cx, cy, t = 0, run = true;
+  let w, h, dpr, f, cx, cy, t = 0, run = true, cDocX = 0, cDocY = 0;
   const m = { x: 0, y: 0, tx: 0, ty: 0, sx: -1e4, sy: -1e4 };
   // levantamiento por partícula: sube rápido hacia el mouse, cae con gravedad cuando se aleja
   const lift = new Float32Array(COLS * ROWS), vel = new Float32Array(COLS * ROWS), RISE = .3, G = .0007;
@@ -466,6 +470,8 @@ function terrain() {
     w = c.clientWidth; h = c.clientHeight;
     c.width = w * dpr; c.height = h * dpr; x.setTransform(dpr, 0, 0, dpr, 0, 0);
     f = Math.max(w, 700) * .85; cx = w / 2; cy = h * .52;
+    // posición del canvas en el documento (cacheada: pedirla por frame fuerza un layout)
+    const r = c.getBoundingClientRect(); cDocX = r.left + scrollX; cDocY = r.top + scrollY;
   };
   resize(); addEventListener('resize', resize);
   addEventListener('pointermove', e => {
@@ -482,13 +488,17 @@ function terrain() {
     m.x = lerp(m.x, m.tx, .05); m.y = lerp(m.y, m.ty, .05);
     const camX = m.x * 8, camH = H + m.y * -1.2;
     // mouse → mundo (relativo al canvas, que se mueve con el scroll)
-    if (m.cx !== undefined) { const b = c.getBoundingClientRect(); m.sx = m.cx - b.left; m.sy = m.cy - b.top; }
+    const cb = { left: cDocX - scrollX, top: cDocY - scrollY }; // rect del canvas en el viewport, sin leer layout
+    if (m.cx !== undefined) { m.sx = m.cx - cb.left; m.sy = m.cy - cb.top; }
     let mx = 1e4, mz = 1e4;
     if (m.sy > cy + 4) { const zz = camH * f / (m.sy - cy); mz = zz - 2; mx = (m.sx - cx) * zz / f + camX; }
     x.clearRect(0, 0, w, h);
+    // solo se cambia fillStyle cuando cambia el color; la opacidad va por globalAlpha
+    let col = null;
+    const paint = (cc, al) => { if (cc !== col) x.fillStyle = col = cc; x.globalAlpha = al; };
     let energy = 0;
     // onda del click: se lee en coords de viewport (el canvas puede estar scrolleado)
-    const now = performance.now(), W = waves(now), FR = W ? fronts(now) : [], cb = W && c.getBoundingClientRect();
+    const now = performance.now(), W = waves(now), FR = W ? fronts(now) : [];
     if (FR.length) shaking = true;
     for (let r = ROWS; r >= 1; r--) {
       const Z = r, zz = Z + 2, depth = 1 - r / ROWS;
@@ -529,11 +539,11 @@ function terrain() {
         // split RGB adentro del anillo (como el filtro sobre el resto de la página)
         if (split > .05) {
           const o = split * 9;
-          x.fillStyle = `rgba(${ERR},${clamp(a * split * 1.4, 0, 1)})`; x.fillRect(sx - o, sy, s, s);
-          x.fillStyle = `rgba(${ACC2},${clamp(a * split * 1.4, 0, 1)})`; x.fillRect(sx + o, sy, s, s);
+          paint(ERR, clamp(a * split * 1.4, 0, 1)); x.fillRect(sx - o, sy, s, s);
+          paint(ACC2, clamp(a * split * 1.4, 0, 1)); x.fillRect(sx + o, sy, s, s);
         }
-        if (bump > .25 || y > 1.55 || sp > 3) x.fillStyle = `rgba(${ACC},${clamp(a + bump * .6, 0, 1)})`;
-        else x.fillStyle = `rgba(${FG},${a * .8})`;
+        if (bump > .25 || y > 1.55 || sp > 3) paint(ACC, clamp(a + bump * .6, 0, 1));
+        else paint(FG, a * .8);
         x.fillRect(sx, sy, s, s);
       }
     }
@@ -682,20 +692,26 @@ function scatterLetters() {
   if (RM) return;
   const KICK = 22, SPRING = .07, DAMP = .87;
   const title = $('.hero-title');
-  let active = [], running = false;
-  // el click solo arranca el loop: el empujón lo da la onda al llegar
-  addEventListener('pointerdown', e => { if (!e.button && !running) { running = true; requestAnimationFrame(loop); } });
+  let active = [], running = false, letters = [];
+  // el click arranca el loop (el empujón lo da la onda al llegar) y mide las letras UNA vez: centro en coords de documento
+  // (medirlas por frame forzaría un layout en cada uno)
+  addEventListener('pointerdown', e => {
+    if (e.button) return;
+    const sx = scrollX, sy = scrollY;
+    letters = $$('#name-1 span, #name-2 span, #big-cta span').map(s => { const b = s.getBoundingClientRect(); return { s, x: b.left + b.width / 2 + sx, y: b.top + b.height / 2 + sy }; });
+    if (!running) { running = true; requestAnimationFrame(loop); }
+  });
   function loop() {
-    const FR = fronts(performance.now()), vh = innerHeight;
+    const FR = fronts(performance.now()), vh = innerHeight, sx = scrollX, sy = scrollY;
     // borde de abajo del renglón: si el scroll ya corrió el nombre hacia su máscara, se mantiene; si no, se abre del todo
     const sunk = parseFloat(($('#name-1').style.translate || '0 0').split(' ')[1]) > .5;
     title.style.setProperty('--clip-b', sunk ? '0px' : '-100vh');
-    if (FR.length) for (const s of $$('#name-1 span, #name-2 span, #big-cta span')) {
-      const b = s.getBoundingClientRect();
-      if (b.bottom < -200 || b.top > vh + 200) continue; // fuera de pantalla: no hace falta
+    if (FR.length) for (const { s, x: lx, y: ly } of letters) {
+      const cxv = lx - sx, cyv = ly - sy; // centro en el viewport
+      if (cyv < -300 || cyv > vh + 300) continue; // fuera de pantalla: no hace falta
       for (const a of FR) {
         if (a.id <= (s._hit || 0)) continue;
-        const dx = b.left + b.width / 2 - a.x, dy = b.top + b.height / 2 - a.y, d = Math.hypot(dx, dy) || 1;
+        const dx = cxv - a.x, dy = cyv - a.y, d = Math.hypot(dx, dy) || 1;
         if (d > a.r) continue; // todavía no le llegó
         s._hit = a.id;
         const p = KICK * (.4 + Math.random() * .8) * waveKick(d);
@@ -899,13 +915,29 @@ function scrollFX() {
   const bar = $('.progress i'), nav = $('.nav');
   const heroPar = $$('[data-hero-par]'), hero = $('#hero .hero-inner');
   const stmt = $('#statement');
-  let words = $$('#statement .w');
-  addEventListener('lang', () => words = $$('#statement .w')); // setLang rearma el statement
+  let words = $$('#statement .w'), lastOn = -1;
+  addEventListener('lang', () => { words = $$('#statement .w'); lastOn = -1; }); // setLang rearma el statement
   const tl = $('.tl'), tlFill = $('.tl-line i'), tlItems = $$('.tl-item');
   const TL_FRONT = .8; // altura de pantalla (0 arriba – 1 abajo) hasta donde llega la línea de la trayectoria
   const track = $('#hs-track'), hsBar = $('.hs-bar i'), hsCur = $('#hs-cur');
-  const mqs = $$('.mq').map(el => ({ el: $('.mq-track', el), dir: +el.dataset.dir, x: 0 }));
-  let ly = scrollY, last = scrollY, vel = 0, dist = 0;
+  const mqs = $$('.mq').map(el => ({ el: $('.mq-track', el), dir: +el.dataset.dir, x: 0, half: 0 }));
+  let ly = scrollY, last = scrollY, vel = 0, dist = 0, lastLy = null, lastCur = '';
+
+  // medidas cacheadas (leerlas por frame fuerza layouts): posiciones en el documento sin transforms (cadena de offsetTop)
+  // y anchos; se recalculan solo cuando algo cambia de tamaño
+  const docTop = el => { let t = 0; for (let e = el; e; e = e.offsetParent) t += e.offsetTop; return t; };
+  const M = {};
+  const measure = () => {
+    M.stmtTop = docTop(stmt); M.stmtH = stmt.offsetHeight;
+    M.tlTop = docTop(tl); M.tlH = tl.offsetHeight;
+    M.items = tlItems.map(docTop);
+    HS.max = Math.max(0, track.scrollWidth - innerWidth); // lo usa también drag()
+    mqs.forEach(m => m.half = m.el.scrollWidth / 2);
+  };
+  measure();
+  const ro = new ResizeObserver(measure);
+  [document.body, track, ...mqs.map(m => m.el)].forEach(el => ro.observe(el));
+  addEventListener('resize', measure);
 
   (function loop() {
     const y = scrollY, vh = innerHeight;
@@ -915,41 +947,40 @@ function scrollFX() {
     if (Math.abs(y - last) > 2) { dist += y - last; if (dist > 120 && y > vh * .8) nav.classList.add('hide'); if (dist < -60 || y < 100) { nav.classList.remove('hide'); dist = 0; } if (y - last > 0 && dist < 0) dist = 0; }
     last = y;
 
-    bar.style.transform = `scaleX(${y / (document.documentElement.scrollHeight - vh)})`;
+    bar.style.transform = `scaleX(${y / (DOC.h - vh)})`;
 
-    // hero parallax + fade
-    if (ly < vh * 1.2) {
+    // hero parallax + fade (solo si cambió)
+    if (ly < vh * 1.2 && Math.abs(ly - lastLy) > .05) {
+      lastLy = ly;
       heroPar.forEach(el => el.style.translate = `0 ${ly * +el.dataset.heroPar * 3}px`);
       hero.style.opacity = clamp(1 - ly / (vh * .7), 0, 1);
     }
 
     // statement scrub
-    const sr = stmt.getBoundingClientRect();
-    const sp = clamp((vh * .85 - sr.top) / (sr.height + vh * .35), 0, 1);
+    const sp = clamp((vh * .85 - (M.stmtTop - y)) / (M.stmtH + vh * .35), 0, 1);
     const on = Math.floor(sp * words.length * 1.05);
-    words.forEach((w, i) => w.classList.toggle('on', i < on));
+    if (on !== lastOn) { lastOn = on; words.forEach((w, i) => w.classList.toggle('on', i < on)); }
 
     // timeline fill
-    const tr = tl.getBoundingClientRect(), front = vh * TL_FRONT;
-    tlFill.style.transform = `scaleY(${clamp((front - tr.top) / tr.height, 0, 1)})`;
+    const front = vh * TL_FRONT;
+    tlFill.style.transform = `scaleY(${clamp((front - (M.tlTop - y)) / M.tlH, 0, 1)})`;
     // marcadores: se prenden cuando la línea llega a su altura y se apagan si retrocede (lit / unlit disparan la animación)
-    tlItems.forEach(it => {
-      const on = it.getBoundingClientRect().top + 48 <= front;
-      if (on !== it.classList.contains('lit')) { it.classList.toggle('lit', on); it.classList.toggle('unlit', !on); }
+    tlItems.forEach((it, i) => {
+      const lit = M.items[i] - y + 48 <= front;
+      if (lit !== it.classList.contains('lit')) { it.classList.toggle('lit', lit); it.classList.toggle('unlit', !lit); }
     });
 
     // carrusel de proyectos (posición la maneja drag())
-    const extra = Math.max(0, track.scrollWidth - innerWidth);
-    const hp = clamp(HS.x / (extra || 1), 0, 1);
+    const hp = clamp(HS.x / (HS.max || 1), 0, 1);
     track.style.transform = `translate3d(${-HS.x}px,0,0)`;
     hsBar.style.transform = `scaleX(${hp})`;
-    hsCur.textContent = pad(Math.min(CV.projects.length, Math.floor(hp * CV.projects.length) + 1));
+    const cur = pad(Math.min(CV.projects.length, Math.floor(hp * CV.projects.length) + 1));
+    if (cur !== lastCur) hsCur.textContent = lastCur = cur;
 
     // marquee con inercia de scroll
     if (!RM) mqs.forEach(m => {
-      const half = m.el.scrollWidth / 2;
       m.x -= (0.6 + Math.abs(vel) * .25) * m.dir * (vel < 0 ? -1 : 1);
-      if (m.x <= -half) m.x += half; if (m.x > 0) m.x -= half;
+      if (m.x <= -m.half) m.x += m.half; if (m.x > 0) m.x -= m.half;
       m.el.style.transform = `translate3d(${m.x}px,0,0) skewX(${clamp(-vel * .3, -12, 12)}deg)`;
     });
     requestAnimationFrame(loop);
@@ -957,13 +988,13 @@ function scrollFX() {
 }
 
 /* ---------------- drag: carrusel + página, con inercia ---------------- */
-const HS = { x: 0 }; // desplazamiento del carrusel (lo lee scrollFX)
+const HS = { x: 0, max: 0 }; // desplazamiento del carrusel (lo lee scrollFX)
 function drag() {
   const track = $('#hs-track'), html = document.documentElement;
   const TH = 6, FR = .95, SKIP = 'input, textarea, select, label, [contenteditable], .term';
   const hs = { v: 0 }, pg = { v: 0 };
   let d = null, ax = null, kill = false;
-  const max = () => Math.max(0, track.scrollWidth - innerWidth);
+  const max = () => HS.max; // ancho extra del carrusel, cacheado por scrollFX (leer scrollWidth por frame fuerza layout)
   // fuera de rango: resistencia elástica
   const rubber = (x, m) => x < 0 ? x * .35 : x > m ? m + (x - m) * .35 : x;
 
@@ -1036,60 +1067,99 @@ function drag() {
 /* ---------------- floaters: parallax de profundidad ----------------
    z = multiplicador de scroll: 1 = se mueve con la página · <1 = más lejos · >1 = más cerca.
    El tamaño también se multiplica por z y el foco está en 1: cuanto más se aleja z de 1 (para cualquier lado), más desenfoque.
-   Los lejanos van detrás del contenido (más tenues); los cercanos delante y solo en los costados para no tapar texto. */
+   Los lejanos van detrás del contenido (más tenues); los cercanos delante y solo en los costados para no tapar texto.
+   Rendimiento: se dibujan en 2 canvas (atrás / adelante del contenido), no como elementos del DOM. Cada forma se
+   pre-renderiza UNA vez con su desenfoque en un sprite (más 2 versiones tintadas para el split RGB de la onda);
+   por frame solo se estampan sprites → sin filtros CSS por elemento ni repintados. */
 function floaters() {
   if (RM) return;
   const { count, countMobile, zMin: Z_MIN, zMax: Z_MAX, blur: BLUR } = CONFIG.floaters; // ver config.js
   const COUNT = innerWidth < 760 ? countMobile : count;
+  // formas en una caja de lado `s` centrada en 0,0 (mismas proporciones que el viewBox 24 de antes)
   const SHAPES = [
-    '<circle cx="12" cy="12" r="9"/>',                                    // círculo
-    '<circle cx="12" cy="12" r="6" fill="currentColor"/>',                // círculo lleno
-    '<rect x="4" y="4" width="16" height="16"/>',                         // cuadrado
-    '<rect x="7" y="7" width="10" height="10" fill="currentColor"/>',     // cuadrado lleno
+    (x, s) => { x.beginPath(); x.arc(0, 0, s * 9 / 24, 0, 7); x.stroke(); },   // círculo
+    (x, s) => { x.beginPath(); x.arc(0, 0, s * 6 / 24, 0, 7); x.fill(); },     // círculo lleno
+    (x, s) => x.strokeRect(-s * 8 / 24, -s * 8 / 24, s * 16 / 24, s * 16 / 24), // cuadrado
+    (x, s) => x.fillRect(-s * 5 / 24, -s * 5 / 24, s * 10 / 24, s * 10 / 24),   // cuadrado lleno
   ];
   const COLORS = ['var(--acc)', 'var(--acc)', 'var(--acc2)', 'var(--fg)', 'var(--mut)'];
   // azar con semilla: mismas posiciones en cada carga
   let seed = 7;
   const rnd = (a = 1, b = 0) => b + ((seed = seed * 16807 % 2147483647) / 2147483647) * (a - b);
-  const back = document.createElement('div'), front = document.createElement('div');
-  back.className = 'floaters'; front.className = 'floaters front';
-  back.setAttribute('aria-hidden', true); front.setAttribute('aria-hidden', true);
+
+  const mk = cls => { const c = document.createElement('canvas'); c.className = cls; c.setAttribute('aria-hidden', true); return c; };
+  const back = mk('floaters'), front = mk('floaters front');
   $('main').before(back); document.body.append(front);
+  const bx = back.getContext('2d'), fx = front.getContext('2d');
+  let dpr = 1, vw = 0, vh = 0;
+  const size = () => {
+    dpr = Math.min(devicePixelRatio || 1, 2); vw = back.clientWidth; vh = back.clientHeight;
+    for (const c of [back, front]) { c.width = Math.round(vw * dpr); c.height = Math.round(vh * dpr); }
+  };
+  size();
 
   const items = Array.from({ length: COUNT }, () => {
     const z = Z_MIN + (Z_MAX - Z_MIN) * rnd() ** 1.6; // sesgado: hay más lejanos que cercanos
     const near = z > 1;
-    const size = rnd(34, 14) * z; // px a z = 1, multiplicado por la profundidad
-    const el = document.createElement('div');
-    el.className = 'fl';
-    el.style.color = COLORS[rnd(COLORS.length) | 0];
-    el.style.opacity = near ? .35 : (.16 + .32 * (z - Z_MIN) / Math.max(.01, 1 - Z_MIN)).toFixed(2);
-    // foco en z = 1: se desenfoca igual alejándose para atrás o para adelante
-    const blur = Math.abs(z - 1) * BLUR, bf = blur > .2 ? `blur(${blur.toFixed(1)}px)` : '';
-    el.style.filter = bf;
-    el.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}">${SHAPES[rnd(SHAPES.length) | 0]}</svg>`;
-    (near ? front : back).append(el);
     return {
-      el, z, bf,
+      z, near,
+      size: rnd(34, 14) * z, // px a z = 1, multiplicado por la profundidad
+      color: COLORS[rnd(COLORS.length) | 0],
+      alpha: near ? .35 : .16 + .32 * (z - Z_MIN) / Math.max(.01, 1 - Z_MIN),
+      blur: Math.abs(z - 1) * BLUR, // foco en z = 1: se desenfoca igual alejándose para atrás o para adelante
+      shape: SHAPES[rnd(SHAPES.length) | 0],
       x: near ? (rnd() < .5 ? rnd(10, 1) : rnd(97, 88)) : rnd(97, 3), // vw
       u: rnd(),                                                       // dónde cae a lo largo del scroll
       rot: rnd(360), spin: rnd(.05, -.05), ph: rnd(6.28), amp: rnd(14, 4) * z,
+      ox: 0, oy: 0, vx: 0, vy: 0, spinX: 0, av: 0, hit: 0,
     };
   });
+
+  // sprite: la forma ya desenfocada (vía sombra de canvas, que desenfoca en todos los navegadores) en su color
+  const sprite = (o, color) => {
+    const pad = Math.ceil(o.blur * 2.5 + 2), S = o.size + pad * 2, c = document.createElement('canvas');
+    c.width = c.height = Math.ceil(S * dpr);
+    const x = c.getContext('2d');
+    x.setTransform(dpr, 0, 0, dpr, 0, 0);
+    x.strokeStyle = x.fillStyle = color; x.lineWidth = 1.5 * o.size / 24;
+    if (o.blur > .2) {
+      // se dibuja fuera del sprite y solo cae adentro su sombra desenfocada (shadowBlur ≈ 2 × radio de blur CSS)
+      x.shadowColor = color; x.shadowBlur = o.blur * 2 * dpr; x.shadowOffsetX = S * 2 * dpr;
+      x.translate(S / 2 - S * 2, S / 2);
+    } else x.translate(S / 2, S / 2);
+    o.shape(x, o.size);
+    return { c, S };
+  };
+  const ERR = () => `rgb(${rgbOf('var(--err)')})`, ACC2 = () => `rgb(${rgbOf('var(--acc2)')})`;
+  const build = () => {
+    const err = ERR(), acc2 = ACC2();
+    for (const o of items) {
+      o.sp = sprite(o, `rgb(${rgbOf(o.color)})`);
+      o.spErr = sprite(o, err); o.spAcc2 = sprite(o, acc2); // para el split RGB de la onda
+    }
+  };
+  build();
+  addEventListener('brand', build);
+  addEventListener('resize', () => { const d = dpr; size(); if (d !== dpr) build(); });
 
   // sacudón (como las partículas del hero): cuando el anillo de la onda del click llega a cada uno, empujón en el sentido
   // de la onda, más fuerte cuanto más cerca (z); vuelve con resorte amortiguado, más un giro extra que se frena solo
   const KICK = 14, SPRING = .07, DAMP = .87;
-  items.forEach(o => Object.assign(o, { ox: 0, oy: 0, vx: 0, vy: 0, spinX: 0, av: 0, hit: 0 }));
   let shaking = false;
 
+  const stamp = (x, sp, cx, cy, ang) => {
+    const c = Math.cos(ang) * dpr, s = Math.sin(ang) * dpr;
+    x.setTransform(c, s, -s, c, cx * dpr, cy * dpr);
+    x.drawImage(sp.c, -sp.S / 2, -sp.S / 2, sp.S, sp.S);
+  };
   let t = 0;
   (function loop() {
     t += 1 / 60;
-    const sy = scrollY, vw = innerWidth, vh = innerHeight, max = document.documentElement.scrollHeight - vh;
+    const sy = scrollY, max = DOC.h - vh;
     let energy = 0;
     const now = performance.now(), W = waves(now), FR = W ? fronts(now) : []; // onda del click
     if (FR.length) shaking = true;
+    for (const x of [bx, fx]) { x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, x.canvas.width, x.canvas.height); }
     for (const o of items) {
       // recorrido propio de cada uno (max * z) repartido en toda la página; z escala la velocidad del scroll
       const y = o.u * (max * o.z + vh * 1.3) - vh * .15 - sy * o.z + Math.sin(t * .6 + o.ph) * o.amp;
@@ -1110,19 +1180,19 @@ function floaters() {
         o.av *= .93; o.spinX += o.av;
         energy += Math.abs(o.vx) + Math.abs(o.vy) + Math.abs(o.ox) + Math.abs(o.oy) + Math.abs(o.av);
       }
-      let fx = x + o.ox, fy = y + o.oy;
-      const vis = fy > -240 && fy < vh + 240;
-      if (vis !== o.vis) { o.vis = vis; o.el.style.visibility = vis ? '' : 'hidden'; }
-      if (!vis) continue;
-      // onda: desplazamiento + split RGB (drop-shadows de color a los lados) mientras el anillo pasa por encima
-      const wv = W && W(fx, fy), split = wv ? wv.e : 0;
-      if (wv) { fx += wv.dx; fy += wv.dy; }
-      if (split > .05 || o.split) {
-        const s = (split * 10 * o.z).toFixed(1);
-        o.el.style.filter = split > .05 ? `${o.bf} drop-shadow(${-s}px 0 0 var(--err)) drop-shadow(${s}px 0 0 var(--acc2))` : o.bf;
-        o.split = split > .05;
+      // centro de la forma (antes: esquina del elemento + medio tamaño)
+      let cx = x + o.ox + o.size / 2, cy = y + o.oy + o.size / 2;
+      if (cy < -240 || cy > vh + 240) continue; // fuera de pantalla: no se dibuja
+      // onda: desplazamiento + split RGB (copias de color a los lados) mientras el anillo pasa por encima
+      const wv = W && W(cx, cy), split = wv ? wv.e : 0;
+      if (wv) { cx += wv.dx; cy += wv.dy; }
+      const ctx = o.near ? fx : bx, ang = (o.rot + o.spinX + t * o.spin * 60) * Math.PI / 180;
+      ctx.globalAlpha = o.alpha;
+      if (split > .05) {
+        const s = split * 10 * o.z;
+        stamp(ctx, o.spErr, cx - s, cy, ang); stamp(ctx, o.spAcc2, cx + s, cy, ang);
       }
-      o.el.style.transform = `translate3d(${fx.toFixed(1)}px,${fy.toFixed(1)}px,0) rotate(${(o.rot + o.spinX + t * o.spin * 60).toFixed(1)}deg)`;
+      stamp(ctx, o.sp, cx, cy, ang);
     }
     // ya se acomodaron: se deja de simular (el giro extra queda donde terminó)
     if (shaking && !FR.length && energy < items.length * .05) {
@@ -1370,17 +1440,36 @@ function waves(now) {
 
 function clickRipple() {
   if (RM) return;
-  const root = document.documentElement, filt = $('#wave'), fe = $('#wave-map');
-  const K = 4, DUR = WAVE.DUR, T = WAVE.T;
-  const EDGE = 14;                             // px de mapa: la distorsión se apaga cerca de los bordes (no samplea afuera → sin blancos)
-  const A_WAVE = .6, A_TEAR = .95;             // fuerza de refracción / tears (0–1 del scale del filtro)
-  const mc = document.createElement('canvas'), mx = mc.getContext('2d');
-  let mw, mh, img, rows, running = false, frame = 0;
-  const ripples = WAVE.list, rnd = (a = 1, b = 0) => b + Math.random() * (a - b);
+  const root = document.documentElement, ripples = WAVE.list, rnd = (a = 1, b = 0) => b + Math.random() * (a - b);
+  const DUR = WAVE.DUR, T = WAVE.T;
+  const A_WAVE = .6, A_TEAR = .95; // fuerza de refracción / tears (0–1 del scale del filtro)
+  /* calidad adaptativa: el filtro sobre <html> cuesta proporcional a los píxeles de pantalla y a la máquina.
+     Mientras corre la onda se miden los frames; si no da abasto (>40ms) baja un nivel en el momento y queda así.
+     Las partículas, floaters, letras y el glitch de texto leen la onda por su cuenta (waves/fronts): siguen igual. */
+  const LEVELS = [
+    { K: 4, f: '#wave' },      // mapa 1/4 de resolución, 3 desplazamientos (split RGB)
+    { K: 6, f: '#wave' },      // mapa más chico (menos JS + PNG)
+    { K: 8, f: '#wave-lite' }, // 1 solo desplazamiento, sin split RGB en el filtro
+    null,                      // sin filtro de página
+  ];
+  const dpr = devicePixelRatio || 1;
+  let lvl = innerWidth * innerHeight * dpr * dpr > 8e6 ? 1 : 0; // pantallas enormes (4K, escalado alto): un nivel menos de arranque
+  let filt, fe, K, EDGE, mw, mh, img, rows, mc, mx;
+  const use = l => {
+    lvl = l;
+    const L = LEVELS[lvl];
+    if (fe) fe.removeAttribute('href');
+    if (!L) { if (!glitching) root.style.removeProperty('filter'); return; }
+    filt = $(L.f); fe = $(L.f === '#wave' ? '#wave-map' : '#wave-map-lite'); K = L.K;
+    EDGE = Math.round(56 / K); // px de mapa: la distorsión se apaga cerca de los bordes (no samplea afuera → sin blancos)
+    mc = document.createElement('canvas'); mx = mc.getContext('2d'); mw = 0;
+  };
+  use(lvl);
+  let running = false, frame = 0, last = 0;
+  const dts = [];
   // clientWidth/Height: sin la scrollbar (ahí no hay contenido para samplear)
   const vwh = () => [root.clientWidth, root.clientHeight];
   const size = () => { const [vw, vh] = vwh(); mw = Math.ceil(vw / K); mh = Math.ceil(vh / K); mc.width = mw; mc.height = mh; img = mx.createImageData(mw, mh); rows = new Float32Array(mh); };
-  size(); addEventListener('resize', size);
 
   addEventListener('pointerdown', e => {
     if (e.button) return;
@@ -1389,17 +1478,32 @@ function clickRipple() {
     // y alcanza para barrer toda la pantalla desde cualquier punto
     const maxR = Math.hypot(...vwh()) + T;
     ripples.push({ id: ++WAVE.n, x, y, maxR, t0: performance.now() });
-    if (!running) { running = true; requestAnimationFrame(loop); }
+    if (!running) { running = true; last = 0; dts.length = 0; requestAnimationFrame(loop); }
   });
 
   // si un frame falla se descarta todo y se limpia: nunca queda trabado
   function loop(now) {
+    // fps: mediana de los últimos 4 frames; si no da abasto, un nivel menos (desde ya, en esta misma onda)
+    if (last) {
+      dts.push(now - last); if (dts.length > 4) dts.shift();
+      if (dts.length === 4 && lvl < LEVELS.length - 1 && [...dts].sort((a, b) => a - b)[1] > 40) { use(lvl + 1); dts.length = 0; }
+    }
+    last = now;
     try { draw(now); } catch { ripples.length = 0; }
     if (ripples.length) requestAnimationFrame(loop);
-    else { if (!glitching) root.style.removeProperty('filter'); fe.removeAttribute('href'); running = false; }
+    else { if (!glitching) root.style.removeProperty('filter'); fe?.removeAttribute('href'); running = false; }
   }
 
   function draw(now) {
+    // ondas vencidas fuera (la lista la comparten las partículas: el ciclo de vida sigue aunque no haya filtro)
+    const act = [];
+    for (let i = ripples.length - 1; i >= 0; i--) {
+      const R = ripples[i], p = Math.max(0, (now - R.t0) / DUR);
+      if (p >= 1) { ripples.splice(i, 1); continue; }
+      act.push({ x: R.x, y: R.y, r: R.maxR * (1 - Math.pow(1 - p, 2.2)), f: Math.pow(1 - p, 1.3) });
+    }
+    if (!act.length || !LEVELS[lvl]) return;
+
     const [vw, vh] = vwh(), sy = scrollY;
     if (Math.ceil(vw / K) !== mw || Math.ceil(vh / K) !== mh) size();
     // el filtro trabaja en coords del documento: su región = el viewport actual (no procesa toda la página)
@@ -1411,22 +1515,18 @@ function clickRipple() {
       for (let k = 0; k < n && y < mh; k++) rows[y++] = v;
     }
 
-    const act = [];
-    for (let i = ripples.length - 1; i >= 0; i--) {
-      const R = ripples[i], p = Math.max(0, (now - R.t0) / DUR);
-      if (p >= 1) { ripples.splice(i, 1); continue; }
-      act.push({ cx: R.x / K, cy: R.y / K, r: R.maxR * (1 - Math.pow(1 - p, 2.2)) / K, f: Math.pow(1 - p, 1.3) });
-    }
-    if (!act.length) return;
-
     const half = T / 2 / K, d = img.data;
+    const A = act.map(a => ({ cx: a.x / K, cy: a.y / K, r: a.r / K, f: a.f }));
     for (let y = 0, i = 0; y < mh; y++) {
       const tear = rows[y], ey = Math.min(1, y / EDGE, (mh - 1 - y) / EDGE);
+      // filas que ningún anillo toca: neutras de una (sin recorrer píxel por píxel con raíces/trig)
+      let rowHit = false;
+      for (const a of A) if (Math.abs(y - a.cy) < a.r + half) { rowHit = true; break; }
+      if (!rowHit || ey <= 0) { d.fill(128, i, i + mw * 4); for (let x = 0; x < mw; x++) d[i + x * 4 + 3] = 255; i += mw * 4; continue; }
       for (let x = 0; x < mw; x++, i += 4) {
         const edge = Math.min(ey, x / EDGE, (mw - 1 - x) / EDGE);
-        if (edge <= 0) { d[i] = d[i + 1] = d[i + 2] = 128; d[i + 3] = 255; continue; }
         let dx = 0, dy = 0;
-        for (const a of act) {
+        if (edge > 0) for (const a of A) {
           const ox = x - a.cx, oy = y - a.cy, dist = Math.sqrt(ox * ox + oy * oy) || 1, s = (dist - a.r) / half;
           if (s <= -1 || s >= 1) continue;
           const e = (.5 + .5 * Math.cos(Math.PI * s)) * a.f, wv = Math.sin(Math.PI * s) * A_WAVE;
@@ -1440,7 +1540,7 @@ function clickRipple() {
     }
     mx.putImageData(img, 0, 0);
     fe.setAttribute('href', mc.toDataURL());
-    if (!glitching) root.style.filter = 'url(#wave)';
+    if (!glitching) root.style.filter = `url(${LEVELS[lvl].f})`;
   }
 }
 
