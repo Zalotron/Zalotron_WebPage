@@ -479,9 +479,16 @@ function terrain() {
   });
   new IntersectionObserver(([en]) => { run = en.isIntersecting; if (run) loop(); }).observe(c);
 
-  const hgt = (X, Z, tt) =>
-    Math.sin(X * .32 + tt * .6) * .55 + Math.sin(Z * .38 - tt * .9) * .5 + Math.sin((X + Z) * .16 + tt * .35) * .9 +
-    Math.sin(Math.hypot(X, Z - 20) * .35 - tt * 1.2) * .35;
+  /* altura del terreno = 4 ondas. Tres dependen solo de la columna, de la fila o de X+Z → se calculan una vez por
+     frame en tablas chicas; la radial usa la distancia al centro, que no cambia → precalculada. Queda 1 seno por partícula */
+  const colS = new Float32Array(COLS), rowS = new Float32Array(ROWS + 1), diagS = new Float32Array(COLS + ROWS + 1);
+  const RAD = new Float32Array(N);
+  for (let r = 1; r <= ROWS; r++) for (let k = 0; k < COLS; k++) RAD[(r - 1) * COLS + k] = Math.hypot(k - COLS / 2, r - 20) * .35;
+  const waveTables = tt => {
+    for (let k = 0; k < COLS; k++) colS[k] = Math.sin((k - COLS / 2) * .32 + tt * .6) * .55;
+    for (let r = 1; r <= ROWS; r++) rowS[r] = Math.sin(r * .38 - tt * .9) * .5;
+    for (let s = 0; s <= COLS + ROWS; s++) diagS[s] = Math.sin((s - COLS / 2) * .16 + tt * .35) * .9; // s = k + r → X + Z = s - COLS/2
+  };
 
   function frame() {
     t += .012;
@@ -500,13 +507,16 @@ function terrain() {
     // onda del click: se lee en coords de viewport (el canvas puede estar scrolleado)
     const now = performance.now(), W = waves(now), FR = W ? fronts(now) : [];
     if (FR.length) shaking = true;
+    waveTables(t);
+    const tRad = t * 1.2;
     for (let r = ROWS; r >= 1; r--) {
       const Z = r, zz = Z + 2, depth = 1 - r / ROWS;
       for (let k = 0; k < COLS; k++) {
         const X = k - COLS / 2;
-        let y = hgt(X, Z, t);
+        const i = (r - 1) * COLS + k;
+        let y = colS[k] + rowS[r] + diagS[k + r] + Math.sin(RAD[i] - tRad) * .35;
         const d2 = (X - mx) ** 2 + (Z - mz) ** 2;
-        const i = (r - 1) * COLS + k, target = Math.exp(-d2 / 14);
+        const target = d2 < 140 ? Math.exp(-d2 / 14) : 0; // lejos del mouse el exp da ~0: no hace falta calcularlo
         if (target >= lift[i]) { lift[i] += (target - lift[i]) * RISE; vel[i] = 0; }
         else { vel[i] += G; lift[i] = Math.max(target, lift[i] - vel[i]); }
         const bump = lift[i];
@@ -877,9 +887,19 @@ function textGlitch() {
     pend = collect();
     if (!running) { running = true; requestAnimationFrame(loop); }
   });
+  // si un frame fallara, se restauran todos los textos (nunca quedan atrapados) y el loop sigue
   function loop() {
-    const now = performance.now(), FR = fronts(now), sy = scrollY, hits = [];
-    // le llega el anillo a un texto (al punto más cercano de su caja) → arranca su glitch
+    let more = false;
+    try { more = tick(); }
+    catch { for (const s of live.values()) try { s.end(true); } catch {} live.clear(); }
+    if (more) requestAnimationFrame(loop);
+    else { running = false; pend = []; }
+  }
+  function tick() {
+    const now = performance.now(), FR = fronts(now), sy = scrollY, hits = new Map(); // nodo → amt (una vez por nodo)
+    // le llega el anillo a un texto (al punto más cercano de su caja) → arranca su glitch.
+    // Con varias ondas a la vez, dos pueden alcanzar el mismo texto en el mismo frame: se anota UNA sola vez
+    // (si se envolvía dos veces, la primera caja quedaba huérfana en la página y el texto atrapado para siempre)
     for (const p of pend) for (const a of FR) {
       if (a.id <= (hitOf.get(p.n) || 0)) continue;
       const dx = Math.max(p.l - a.x, 0, a.x - p.r), dy = Math.max(p.t - sy - a.y, 0, a.y - (p.b - sy)), d = Math.hypot(dx, dy);
@@ -887,11 +907,14 @@ function textGlitch() {
       hitOf.set(p.n, a.id);
       const amt = AMT * waveFall(d) + MIN, s = live.get(p.n);
       if (s) { s.t0 = now; s.amt = Math.max(s.amt, amt); }
-      else if (p.n.isConnected) hits.push({ n: p.n, amt });
+      else if (p.n.isConnected) hits.set(p.n, Math.max(hits.get(p.n) || 0, amt));
     }
     // primero se mide todo, después se escribe (sin forzar un layout por nodo)
-    const ready = hits.map(h => ({ h, apply: h.n.nodeType === 3 ? prepText(h.n) : prepInput(h.n) }));
-    ready.forEach(({ h, apply }) => live.set(h.n, { ...apply(), t0: now, amt: h.amt, f: 0 }));
+    const ready = [...hits].map(([n, amt]) => ({ n, amt, apply: n.nodeType === 3 ? prepText(n) : prepInput(n) }));
+    for (const { n, amt, apply } of ready) {
+      if (!n.isConnected || live.has(n)) continue; // por las dudas: nunca envolver algo que ya no está o ya glitchea
+      live.set(n, { ...apply(), t0: now, amt, f: 0 });
+    }
 
     for (const [n, s] of live) {
       // si alguien más reescribió ese texto (scramble, reloj, idioma) o escribieron en el input: se suelta sin pisar nada
@@ -905,8 +928,7 @@ function textGlitch() {
         if (o.c.textContent !== g) o.c.textContent = g;
       }
     }
-    if (FR.length || live.size) requestAnimationFrame(loop);
-    else { running = false; pend = []; }
+    return FR.length > 0 || live.size > 0;
   }
 }
 
@@ -922,6 +944,8 @@ function scrollFX() {
   const track = $('#hs-track'), hsBar = $('.hs-bar i'), hsCur = $('#hs-cur');
   const mqs = $$('.mq').map(el => ({ el: $('.mq-track', el), dir: +el.dataset.dir, x: 0, half: 0 }));
   let ly = scrollY, last = scrollY, vel = 0, dist = 0, lastLy = null, lastCur = '';
+  // escribe el transform solo si cambió (cada escritura invalida estilos aunque sea el mismo valor)
+  const setT = (el, v) => { if (el._t !== v) el.style.transform = el._t = v; };
 
   // medidas cacheadas (leerlas por frame fuerza layouts): posiciones en el documento sin transforms (cadena de offsetTop)
   // y anchos; se recalculan solo cuando algo cambia de tamaño
@@ -947,7 +971,7 @@ function scrollFX() {
     if (Math.abs(y - last) > 2) { dist += y - last; if (dist > 120 && y > vh * .8) nav.classList.add('hide'); if (dist < -60 || y < 100) { nav.classList.remove('hide'); dist = 0; } if (y - last > 0 && dist < 0) dist = 0; }
     last = y;
 
-    bar.style.transform = `scaleX(${y / (DOC.h - vh)})`;
+    setT(bar, `scaleX(${(y / (DOC.h - vh)).toFixed(4)})`);
 
     // hero parallax + fade (solo si cambió)
     if (ly < vh * 1.2 && Math.abs(ly - lastLy) > .05) {
@@ -963,7 +987,7 @@ function scrollFX() {
 
     // timeline fill
     const front = vh * TL_FRONT;
-    tlFill.style.transform = `scaleY(${clamp((front - (M.tlTop - y)) / M.tlH, 0, 1)})`;
+    setT(tlFill, `scaleY(${clamp((front - (M.tlTop - y)) / M.tlH, 0, 1).toFixed(4)})`);
     // marcadores: se prenden cuando la línea llega a su altura y se apagan si retrocede (lit / unlit disparan la animación)
     tlItems.forEach((it, i) => {
       const lit = M.items[i] - y + 48 <= front;
@@ -972,8 +996,8 @@ function scrollFX() {
 
     // carrusel de proyectos (posición la maneja drag())
     const hp = clamp(HS.x / (HS.max || 1), 0, 1);
-    track.style.transform = `translate3d(${-HS.x}px,0,0)`;
-    hsBar.style.transform = `scaleX(${hp})`;
+    setT(track, `translate3d(${(-HS.x).toFixed(2)}px,0,0)`);
+    setT(hsBar, `scaleX(${hp.toFixed(4)})`);
     const cur = pad(Math.min(CV.projects.length, Math.floor(hp * CV.projects.length) + 1));
     if (cur !== lastCur) hsCur.textContent = lastCur = cur;
 
@@ -1467,9 +1491,33 @@ function clickRipple() {
   use(lvl);
   let running = false, frame = 0, last = 0;
   const dts = [];
-  // clientWidth/Height: sin la scrollbar (ahí no hay contenido para samplear)
-  const vwh = () => [root.clientWidth, root.clientHeight];
-  const size = () => { const [vw, vh] = vwh(); mw = Math.ceil(vw / K); mh = Math.ceil(vh / K); mc.width = mw; mc.height = mh; img = mx.createImageData(mw, mh); rows = new Float32Array(mh); };
+  // viewport sin la scrollbar (ahí no hay contenido para samplear). Cacheado: leer clientWidth por frame fuerza un layout.
+  // El ResizeObserver sobre <html> también ve aparecer/desaparecer la scrollbar; resize, los cambios de alto de ventana
+  let VW = root.clientWidth, VH = root.clientHeight;
+  const vread = () => { VW = root.clientWidth; VH = root.clientHeight; };
+  new ResizeObserver(vread).observe(root); addEventListener('resize', vread);
+  const vwh = () => [VW, VH];
+  let NEUTRAL; // mapa entero en gris neutro (sin desplazamiento): base de cada frame
+  const size = () => {
+    const [vw, vh] = vwh(); mw = Math.ceil(vw / K); mh = Math.ceil(vh / K); mc.width = mw; mc.height = mh;
+    img = mx.createImageData(mw, mh); rows = new Float32Array(mh);
+    NEUTRAL = new Uint8ClampedArray(mw * mh * 4).fill(128); for (let i = 3; i < NEUTRAL.length; i += 4) NEUTRAL[i] = 255;
+  };
+  // el mapa se codifica en segundo plano (toBlob) en vez de toDataURL en el hilo principal en cada frame
+  let pending = false, url = null, live = false; // live: hay onda o calibración usando el mapa
+  const publish = () => {
+    if (pending) return;
+    pending = true;
+    mc.toBlob(b => {
+      pending = false;
+      if (!b || !live) return; // la onda ya terminó
+      const u = URL.createObjectURL(b);
+      fe.setAttribute('href', u);
+      if (url) URL.revokeObjectURL(url);
+      url = u;
+    });
+  };
+  const clearMap = () => { live = false; fe?.removeAttribute('href'); if (url) { URL.revokeObjectURL(url); url = null; } };
 
   addEventListener('pointerdown', e => {
     if (e.button) return;
@@ -1481,6 +1529,33 @@ function clickRipple() {
     if (!running) { running = true; last = 0; dts.length = 0; requestAnimationFrame(loop); }
   });
 
+  /* calibración, con el loader tapando la página: se aplica el filtro de verdad unos frames (con mapa neutro: no deforma
+     nada, no se ve) y se compara contra frames sin filtro. Si la máquina no da abasto, ya arranca en un nivel más liviano.
+     De paso paga los costos de primera vez (compilar el filtro, encoder PNG, JIT): el primer click llega "caliente" */
+  function calibrate() {
+    const base = [], test = [], med = a => [...a].sort((p, q) => p - q)[a.length >> 1];
+    let prev = 0;
+    const end = () => { if (running) return; if (!glitching) root.style.removeProperty('filter'); clearMap(); };
+    const down = () => { use(lvl + 1); test.length = 0; };
+    // onda fantasma: centro muy lejos y radio mínimo → nunca le llega a nada (no se ve ni mueve nada), pero partículas,
+    // floaters y el resto del código de la onda se ejecutan y el navegador los optimiza antes del primer click real
+    ripples.push({ id: ++WAVE.n, x: -1e5, y: -1e5, maxR: 1, t0: performance.now() });
+    requestAnimationFrame(function step(now) {
+      if (running) return; // hicieron click durante la calibración: manda la onda real
+      if (prev) (base.length < 6 ? base : test).push(now - prev);
+      prev = now;
+      if (base.length >= 6) {
+        if (test.length && test[test.length - 1] > 150) down();                       // muy lento: un nivel menos ya
+        else if (test.length >= 6) { if (med(test) > 40 && med(test) - med(base) > 10) down(); else return end(); }
+        if (!LEVELS[lvl]) return end();
+        const [vw, vh] = vwh();
+        try { render([{ x: vw / 2, y: vh / 2, r: Math.min(vw, vh) * .3, f: 1 }], true); } catch { return end(); }
+      }
+      requestAnimationFrame(step);
+    });
+  }
+  if (document.body.classList.contains('loading')) setTimeout(calibrate, 350);
+
   // si un frame falla se descarta todo y se limpia: nunca queda trabado
   function loop(now) {
     // fps: mediana de los últimos 4 frames; si no da abasto, un nivel menos (desde ya, en esta misma onda)
@@ -1491,7 +1566,7 @@ function clickRipple() {
     last = now;
     try { draw(now); } catch { ripples.length = 0; }
     if (ripples.length) requestAnimationFrame(loop);
-    else { if (!glitching) root.style.removeProperty('filter'); fe?.removeAttribute('href'); running = false; }
+    else { if (!glitching) root.style.removeProperty('filter'); clearMap(); running = false; }
   }
 
   function draw(now) {
@@ -1503,7 +1578,11 @@ function clickRipple() {
       act.push({ x: R.x, y: R.y, r: R.maxR * (1 - Math.pow(1 - p, 2.2)), f: Math.pow(1 - p, 1.3) });
     }
     if (!act.length || !LEVELS[lvl]) return;
+    render(act, false);
+  }
 
+  // mapa de desplazamiento + filtro aplicado; neutral = mapa sin deformación (mismo costo, no se ve: para calibrar)
+  function render(act, neutral) {
     const [vw, vh] = vwh(), sy = scrollY;
     if (Math.ceil(vw / K) !== mw || Math.ceil(vh / K) !== mh) size();
     // el filtro trabaja en coords del documento: su región = el viewport actual (no procesa toda la página)
@@ -1517,13 +1596,21 @@ function clickRipple() {
 
     const half = T / 2 / K, d = img.data;
     const A = act.map(a => ({ cx: a.x / K, cy: a.y / K, r: a.r / K, f: a.f }));
-    for (let y = 0, i = 0; y < mh; y++) {
+    live = true;
+    d.set(NEUTRAL); // todo neutro de base; solo se calculan los píxeles que toca algún anillo
+    for (let y = 0; y < mh; y++) {
       const tear = rows[y], ey = Math.min(1, y / EDGE, (mh - 1 - y) / EDGE);
-      // filas que ningún anillo toca: neutras de una (sin recorrer píxel por píxel con raíces/trig)
-      let rowHit = false;
-      for (const a of A) if (Math.abs(y - a.cy) < a.r + half) { rowHit = true; break; }
-      if (!rowHit || ey <= 0) { d.fill(128, i, i + mw * 4); for (let x = 0; x < mw; x++) d[i + x * 4 + 3] = 255; i += mw * 4; continue; }
-      for (let x = 0; x < mw; x++, i += 4) {
+      if (ey <= 0) continue;
+      // tramos de esta fila dentro de cada anillo (entre radio interior y exterior): 1 o 2 tramos por anillo
+      const spans = [];
+      for (const a of A) {
+        const oy = Math.abs(y - a.cy), ro = a.r + half;
+        if (oy >= ro) continue;
+        const xo = Math.sqrt(ro * ro - oy * oy), ri = a.r - half, xi = ri > oy ? Math.sqrt(ri * ri - oy * oy) : 0;
+        if (xi > 0) spans.push(a.cx - xo, a.cx - xi, a.cx + xi, a.cx + xo); else spans.push(a.cx - xo, a.cx + xo);
+      }
+      for (let sp = 0; sp < spans.length; sp += 2)
+      for (let x = Math.max(0, Math.floor(spans[sp])), x1 = Math.min(mw - 1, Math.ceil(spans[sp + 1])), i = (y * mw + x) * 4; x <= x1; x++, i += 4) {
         const edge = Math.min(ey, x / EDGE, (mw - 1 - x) / EDGE);
         let dx = 0, dy = 0;
         if (edge > 0) for (const a of A) {
@@ -1538,10 +1625,32 @@ function clickRipple() {
         d[i + 2] = 128; d[i + 3] = 255;
       }
     }
+    if (neutral) d.set(NEUTRAL); // calibración: mismo trabajo, pero el mapa queda sin deformación
     mx.putImageData(img, 0, 0);
-    fe.setAttribute('href', mc.toDataURL());
+    publish();
     if (!glitching) root.style.filter = `url(${LEVELS[lvl].f})`;
   }
+}
+
+/* ---------------- granulado de TV en los rellenos ----------------
+   Tile de ruido monocromo (1 grano = 1 píxel de pantalla) con una leve variación por renglón ('lluvia' de TV).
+   Es el fondo de .fill-grain, que multiplica sobre la página y se mueve a saltos (ver styles.css). Config: CONFIG.fillGrain */
+function fillGrain() {
+  const el = $('.fill-grain'), C = CONFIG.fillGrain;
+  if (!el) return;
+  if (!C?.enabled) return el.remove();
+  const dpr = Math.min(devicePixelRatio || 1, 2), S = 256, n = Math.round(S * dpr);
+  const c = document.createElement('canvas'); c.width = c.height = n;
+  const x = c.getContext('2d'), img = x.createImageData(n, n), d = img.data, A = clamp(C.amount, 0, 1) * 255;
+  for (let y = 0, i = 0; y < n; y++) {
+    const row = .7 + Math.random() * .6; // renglones un poco más o menos cargados
+    for (let k = 0; k < n; k++, i += 4) { d[i] = d[i + 1] = d[i + 2] = 255 - Math.random() * A * row; d[i + 3] = 255; }
+  }
+  x.putImageData(img, 0, 0);
+  el.style.backgroundImage = `url(${c.toDataURL()})`;
+  el.style.backgroundSize = `${S}px ${S}px`;
+  el.style.setProperty('--fg-dur', `${8 / Math.max(1, C.fps)}s`); // 8 saltos por ciclo
+  if (RM) el.style.animation = 'none';
 }
 
 /* ---------------- brand color picker ---------------- */
@@ -1572,6 +1681,7 @@ function brandPicker() {
 render();
 lang();
 brandPicker();
+fillGrain();
 history.scrollRestoration = 'manual'; scrollTo(0, 0);
 const field = terrain();
 clock(); cursor(); anchors(); email(); terminal(); projectArt(); scrollFX(); drag(); floaters(); scatterLetters(); textGlitch(); clickRipple();boot().then(() => {

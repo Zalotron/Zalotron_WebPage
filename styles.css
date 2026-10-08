@@ -41,6 +41,15 @@ main,footer{position:relative;z-index:1}
 .grain{position:fixed;inset:-50%;width:200%;height:200%;pointer-events:none;z-index:90;opacity:.07;
   background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
   animation:grain .8s steps(5) infinite}
+/* granulado de TV en los rellenos: ruido (lo genera main.js, config en config.js → fillGrain) multiplicado sobre la página.
+   Multiplicar oscurece en proporción al brillo: sobre el fondo oscuro casi no se ve, sobre letras, tarjetas y rellenos
+   claros o de color aparece la textura. Se anima moviendo la capa a saltos (transform: sin repintar) */
+.fill-grain{position:fixed;inset:-50%;width:200%;height:200%;pointer-events:none;z-index:89;mix-blend-mode:multiply;
+  animation:fill-grain var(--fg-dur,.5s) steps(1) infinite}
+@keyframes fill-grain{
+  0%{transform:translate(0,0)} 12.5%{transform:translate(-37px,19px)} 25%{transform:translate(23px,-41px)}
+  37.5%{transform:translate(-11px,-29px)} 50%{transform:translate(43px,13px)} 62.5%{transform:translate(-29px,37px)}
+  75%{transform:translate(17px,-7px)} 87.5%{transform:translate(-47px,-17px)} 100%{transform:translate(0,0)}}
 @keyframes grain{0%{transform:translate(0,0)}20%{transform:translate(-3%,2%)}40%{transform:translate(2%,-3%)}60%{transform:translate(-2%,-1%)}80%{transform:translate(3%,3%)}100%{transform:translate(0,0)}}
 .bg-grid{position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.5;
   background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
@@ -158,7 +167,8 @@ zg-c{display:inline-block;text-align:center}
 .sc{color:var(--acc)}
 .hero-foot{display:flex;justify-content:space-between;align-items:flex-end;margin-top:clamp(24px,5vh,56px);opacity:0;transform:translateY(20px);transition:all 1s var(--out) .7s}
 .ready .hero-foot{opacity:1;transform:none}
-.hero-role{font-size:clamp(12px,1.2vw,15px);color:var(--fg)}
+/* una sola línea siempre: el rol rota de texto (y puede tocarle un glitch con el ancho congelado) → nunca se parte ni se achica */
+.hero-role{font-size:clamp(12px,1.2vw,15px);color:var(--fg);white-space:nowrap;flex-shrink:0;min-width:24ch}
 .hero-role #role{color:var(--acc)}
 .caret{animation:blink 1s steps(1) infinite;color:var(--acc)}
 @keyframes blink{50%{opacity:0}}

@@ -2,7 +2,7 @@
    Datos que cambian seguido. Editá acá: el sitio los lee de este archivo. */
 const CONFIG = {
   // color de marca: todos los colores del sitio se derivan de este (el picker de la nav lo pisa solo para quien lo usa)
-  brandColor: '#d4ff3a',
+  brandColor: '#fe4d4d',
 
   /* elementos flotantes de fondo (parallax). z = multiplicador de scroll de cada uno:
        1 = se mueve con la página · <1 = más lejos (más lento y chico) · >1 = más cerca (más rápido y grande) */
@@ -12,6 +12,14 @@ const CONFIG = {
     zMin: .3,         // profundidad del más lejano
     zMax: 1.9,        // profundidad del más cercano
     blur: 2,          // px de desenfoque por cada unidad que z se aleja de 1 (z = 1 queda nítido)
+  },
+
+  /* granulado de TV en movimiento sobre los rellenos (letras, tarjetas, botones: todo lo claro o de color).
+     Sobre el fondo oscuro casi no se nota */
+  fillGrain: {
+    enabled: true,
+    amount: .22, // intensidad: cuánto oscurecen los granos (0 = nada, 1 = máximo)
+    fps: 16,     // cambios de grano por segundo
   },
 
   /* glitch de caracteres con la onda del click: al pasar el anillo, algunos caracteres de los textos se cambian un momento
